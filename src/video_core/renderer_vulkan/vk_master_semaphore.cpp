@@ -34,7 +34,7 @@ void MarkMasterSemaphoreInitStage(const char* stage, size_t index = 0) {
 } // Anonymous namespace
 
 MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
-    if (!device.HasTimelineSemaphore()) {
+    const auto initialize_fence_mode = [this] {
         MarkMasterSemaphoreInitStage("fence_mode");
         static constexpr VkFenceCreateInfo fence_ci{
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .pNext = nullptr, .flags = 0};
@@ -49,6 +49,10 @@ MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
         MarkMasterSemaphoreInitStage("fence_wait_thread");
         wait_thread = std::jthread([this](std::stop_token token) { WaitThread(token); });
         MarkMasterSemaphoreInitStage("complete");
+    };
+
+    if (!device.HasTimelineSemaphore()) {
+        initialize_fence_mode();
         return;
     }
 
@@ -65,7 +69,20 @@ MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
         .flags = 0,
     };
     MarkMasterSemaphoreInitStage("create_timeline_semaphore");
-    semaphore = device.GetLogical().CreateSemaphore(semaphore_ci);
+    try {
+        semaphore = device.GetLogical().CreateSemaphore(semaphore_ci);
+    } catch (const vk::Exception& exception) {
+        LOG_WARNING(Render_Vulkan,
+                    "Timeline semaphore creation failed with {}. Falling back to fences.",
+                    exception.what());
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_WARN, "EdenVulkanScheduler",
+                            "timeline semaphore failed error=%s; falling back to fences",
+                            exception.what());
+#endif
+        initialize_fence_mode();
+        return;
+    }
     MarkMasterSemaphoreInitStage("create_timeline_semaphore_succeeded");
 
     if (!Settings::values.renderer_debug) {
