@@ -6,10 +6,25 @@
 #include "video_core/renderer_vulkan/vk_command_pool.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace Vulkan {
 
 constexpr size_t COMMAND_BUFFER_POOL_SIZE = 4;
+
+namespace {
+
+void MarkCommandPoolInitStage(const char* stage) {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanScheduler", "command_pool stage=%s", stage);
+#else
+    (void)stage;
+#endif
+}
+
+} // Anonymous namespace
 
 struct CommandPool::Pool {
     vk::CommandPool handle;
@@ -25,6 +40,7 @@ void CommandPool::Allocate(size_t begin, size_t end) {
     // Command buffers are going to be committed, recorded, executed every single usage cycle.
     // They are also going to be reset when committed.
     Pool& pool = pools.emplace_back();
+    MarkCommandPoolInitStage("create_command_pool");
     pool.handle = device.GetLogical().CreateCommandPool({
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .pNext = nullptr,
@@ -32,7 +48,10 @@ void CommandPool::Allocate(size_t begin, size_t end) {
             VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
         .queueFamilyIndex = device.GetGraphicsFamily(),
     });
+    MarkCommandPoolInitStage("create_command_pool_succeeded");
+    MarkCommandPoolInitStage("allocate_command_buffers");
     pool.cmdbufs = pool.handle.Allocate(COMMAND_BUFFER_POOL_SIZE);
+    MarkCommandPoolInitStage("allocate_command_buffers_succeeded");
 }
 
 VkCommandBuffer CommandPool::Commit() {

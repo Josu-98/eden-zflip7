@@ -24,9 +24,23 @@
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace Vulkan {
 
+namespace {
+
+void MarkSchedulerInitStage(const char* stage) {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanScheduler", "stage=%s", stage);
+#else
+    (void)stage;
+#endif
+}
+
+} // Anonymous namespace
 
 void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
                                          vk::CommandBuffer upload_cmdbuf) {
@@ -45,8 +59,10 @@ void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
 
 Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
     : device{device_}, state_tracker{state_tracker_},
-      master_semaphore{std::make_unique<MasterSemaphore>(device)},
-      command_pool{std::make_unique<CommandPool>(*master_semaphore, device)} {
+      master_semaphore{
+          std::make_unique<MasterSemaphore>((MarkSchedulerInitStage("master_semaphore"), device))},
+      command_pool{std::make_unique<CommandPool>(
+          (MarkSchedulerInitStage("command_pool"), *master_semaphore), device)} {
 
     /*// PRE-OPTIMIZATION: Warm up the pool to prevent mid-frame spikes
     {
@@ -57,9 +73,13 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
         }
     }*/
 
+    MarkSchedulerInitStage("acquire_new_chunk");
     AcquireNewChunk();
+    MarkSchedulerInitStage("allocate_worker_command_buffer");
     AllocateWorkerCommandBuffer();
+    MarkSchedulerInitStage("worker_thread");
     worker_thread = std::jthread([this](std::stop_token token) { WorkerThread(token); });
+    MarkSchedulerInitStage("complete");
 }
 
 Scheduler::~Scheduler() = default;

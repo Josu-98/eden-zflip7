@@ -11,22 +11,48 @@
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace Vulkan {
 
 constexpr u64 FENCE_RESERVE_SIZE = 8;
 
+namespace {
+
+void MarkMasterSemaphoreInitStage(const char* stage, size_t index = 0) {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanScheduler", "master_semaphore stage=%s index=%zu",
+                        stage, index);
+#else
+    (void)stage;
+    (void)index;
+#endif
+}
+
+} // Anonymous namespace
+
 MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
     if (!device.HasTimelineSemaphore()) {
+        MarkMasterSemaphoreInitStage("fence_mode");
         static constexpr VkFenceCreateInfo fence_ci{
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .pNext = nullptr, .flags = 0};
         free_queue.resize(FENCE_RESERVE_SIZE);
-        std::ranges::generate(free_queue,
-                              [&] { return device.GetLogical().CreateFence(fence_ci); });
+        size_t fence_index = 0;
+        std::ranges::generate(free_queue, [&] {
+            MarkMasterSemaphoreInitStage("create_fence", fence_index);
+            auto fence = device.GetLogical().CreateFence(fence_ci);
+            MarkMasterSemaphoreInitStage("create_fence_succeeded", fence_index++);
+            return fence;
+        });
+        MarkMasterSemaphoreInitStage("fence_wait_thread");
         wait_thread = std::jthread([this](std::stop_token token) { WaitThread(token); });
+        MarkMasterSemaphoreInitStage("complete");
         return;
     }
 
+    MarkMasterSemaphoreInitStage("timeline_mode");
     static constexpr VkSemaphoreTypeCreateInfo semaphore_type_ci{
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
         .pNext = nullptr,
@@ -38,9 +64,12 @@ MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
         .pNext = &semaphore_type_ci,
         .flags = 0,
     };
+    MarkMasterSemaphoreInitStage("create_timeline_semaphore");
     semaphore = device.GetLogical().CreateSemaphore(semaphore_ci);
+    MarkMasterSemaphoreInitStage("create_timeline_semaphore_succeeded");
 
     if (!Settings::values.renderer_debug) {
+        MarkMasterSemaphoreInitStage("complete");
         return;
     }
     // Validation layers have a bug where they fail to track resource usage when using timeline
@@ -54,6 +83,7 @@ MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
             }
         }
     });
+    MarkMasterSemaphoreInitStage("complete");
 }
 
 MasterSemaphore::~MasterSemaphore() = default;
