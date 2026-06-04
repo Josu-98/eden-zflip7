@@ -40,10 +40,21 @@
 #include "video_core/vulkan_common/vulkan_surface.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef __ANDROID__
+#include <android/log.h>
 #include <jni.h>
 #endif
 namespace Vulkan {
 namespace {
+
+thread_local const char* renderer_init_stage = "base";
+
+void MarkRendererInitStage(const char* stage) {
+    renderer_init_stage = stage;
+    LOG_INFO(Render_Vulkan, "RendererVulkan init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit", "stage=%s", stage);
+#endif
+}
 
 constexpr VkExtent2D CaptureImageSize{
     .width = VideoCore::Capture::LinearWidth,
@@ -110,54 +121,63 @@ try
     : RendererBase(emu_window, std::move(context_))
     , device_memory(device_memory_)
     , gpu(gpu_)
-    , library(OpenLibrary(context.get()))
+    , library(OpenLibrary((MarkRendererInitStage("library"), context.get())))
     , dld()
     // Create raw Vulkan instance first
-    , instance(CreateInstance(*library,
+    , instance(CreateInstance((MarkRendererInitStage("instance"), *library),
                             dld,
                             VK_API_VERSION_1_1,
                             render_window.GetWindowInfo().type,
                             Settings::values.renderer_debug.GetValue()))
     // Create debug messenger if debug is enabled
-    , debug_messenger(Settings::values.renderer_debug ? CreateDebugUtilsCallback(instance)
-                                                    : vk::DebugUtilsMessenger{})
+    , debug_messenger((MarkRendererInitStage("debug_messenger"),
+                       Settings::values.renderer_debug ? CreateDebugUtilsCallback(instance)
+                                                       : vk::DebugUtilsMessenger{}))
     // Create surface
-    , surface(CreateSurface(instance, render_window.GetWindowInfo()))
-    , device(CreateDevice(instance, dld, *surface))
-    , memory_allocator(device)
+    , surface(CreateSurface((MarkRendererInitStage("surface"), instance),
+                            render_window.GetWindowInfo()))
+    , device(CreateDevice((MarkRendererInitStage("device"), instance), dld, *surface))
+    , memory_allocator((MarkRendererInitStage("memory_allocator"), device))
     , state_tracker()
-    , scheduler(device, state_tracker)
-    , swapchain(*surface,
+    , scheduler((MarkRendererInitStage("scheduler"), device), state_tracker)
+    , swapchain((MarkRendererInitStage("swapchain"), *surface),
                 device,
                 scheduler,
                render_window.GetFramebufferLayout().width,
                render_window.GetFramebufferLayout().height)
-    , present_manager(instance,
+    , present_manager((MarkRendererInitStage("present_manager"), instance),
                       render_window,
                       device,
                       memory_allocator,
                       scheduler,
                       swapchain,
                       surface)
-    , blit_swapchain(device_memory,
+    , blit_swapchain((MarkRendererInitStage("blit_swapchain"), device_memory),
                    device,
                    memory_allocator,
                    present_manager,
                    scheduler,
                    PresentFiltersForDisplay)
-    , blit_capture(device_memory,
+    , blit_capture((MarkRendererInitStage("blit_capture"), device_memory),
                    device,
                    memory_allocator,
                    present_manager,
                    scheduler,
                    PresentFiltersForDisplay)
-    , blit_applet(device_memory,
+    , blit_applet((MarkRendererInitStage("blit_applet"), device_memory),
                   device,
                   memory_allocator,
                   present_manager,
                   scheduler,
                   PresentFiltersForAppletCapture)
-    , rasterizer(render_window, gpu, device_memory, device, memory_allocator, state_tracker, scheduler) {
+    , rasterizer((MarkRendererInitStage("rasterizer"), render_window),
+                 gpu,
+                 device_memory,
+                 device,
+                 memory_allocator,
+                 state_tracker,
+                 scheduler) {
+    MarkRendererInitStage("complete");
 
     if (Settings::values.renderer_force_max_clock.GetValue() && device.ShouldBoostClocks()) {
         turbo_mode.emplace(instance, dld);
@@ -166,7 +186,12 @@ try
 
     Report();
 } catch (const vk::Exception& exception) {
-    LOG_ERROR(Render_Vulkan, "Vulkan initialization failed with error: {}", exception.what());
+    LOG_ERROR(Render_Vulkan, "Vulkan initialization failed at stage {} with error: {}",
+              renderer_init_stage, exception.what());
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_ERROR, "EdenVulkanInit", "failed stage=%s error=%s",
+                        renderer_init_stage, exception.what());
+#endif
     throw std::runtime_error{fmt::format("Vulkan initialization error {}", exception.what())};
 }
 
