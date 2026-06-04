@@ -7,6 +7,7 @@
 #define VMA_IMPLEMENTATION
 #include "video_core/vulkan_common/vma.h"
 
+#include <array>
 #include <codecvt>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include <thread>
 #include <vector>
 #include <dlfcn.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -100,6 +102,35 @@
 
 static EmulationSession s_instance;
 
+static std::string GetAndroidProperty(const char* name) {
+    std::array<char, PROP_VALUE_MAX> value{};
+    const int length = __system_property_get(name, value.data());
+
+    if (length <= 0) {
+        return {};
+    }
+
+    return std::string(value.data(), static_cast<std::size_t>(length));
+}
+
+static bool IsExperimentalSamsungXclipseDevice() {
+    const auto manufacturer = GetAndroidProperty("ro.product.manufacturer");
+    const auto soc_manufacturer = GetAndroidProperty("ro.soc.manufacturer");
+    const auto soc_model = GetAndroidProperty("ro.soc.model");
+    const auto product_model = GetAndroidProperty("ro.product.model");
+
+    const bool is_samsung = manufacturer == "samsung" || soc_manufacturer == "Samsung";
+    const bool is_z_flip7 = product_model == "SM-F766B";
+    const bool is_exynos_2500_family = soc_model == "s5e9955";
+
+    LOG_INFO(Frontend,
+             "[ZFlip7Driver] Device properties: manufacturer='{}', model='{}', "
+             "soc_manufacturer='{}', soc_model='{}'",
+             manufacturer, product_model, soc_manufacturer, soc_model);
+
+    return is_samsung && (is_z_flip7 || is_exynos_2500_family);
+}
+
 //Abdroid Multiplayer which can be initialized with parameters
 std::unique_ptr<AndroidMultiplayer> multiplayer{nullptr};
 std::shared_ptr<Core::AnnounceMultiplayerSession> announce_multiplayer_session;
@@ -161,23 +192,37 @@ void EmulationSession::InitializeGpuDriver(const std::string& hook_lib_dir,
     const char* file_redirect_dir_{};
     int featureFlags{};
 
+    LOG_INFO(Frontend,
+             "[ZFlip7Driver] InitializeGpuDriver: hook_lib_dir='{}', custom_driver_dir='{}', "
+             "custom_driver_name='{}', file_redirect_dir='{}'",
+             hook_lib_dir, custom_driver_dir, custom_driver_name, file_redirect_dir);
+
     // Enable driver file redirection when renderer debugging is enabled.
     if (Settings::values.renderer_debug && file_redirect_dir.size()) {
         featureFlags |= ADRENOTOOLS_DRIVER_FILE_REDIRECT;
         file_redirect_dir_ = file_redirect_dir.c_str();
+        LOG_INFO(Frontend, "[ZFlip7Driver] Driver file redirection enabled");
     }
 
     // Try to load a custom driver.
     if (custom_driver_name.size()) {
+        LOG_INFO(Frontend,
+                 "[ZFlip7Driver] Attempting custom Vulkan driver load through adrenotools");
         handle = adrenotools_open_libvulkan(
             RTLD_NOW, featureFlags | ADRENOTOOLS_DRIVER_CUSTOM, nullptr, hook_lib_dir.c_str(),
             custom_driver_dir.c_str(), custom_driver_name.c_str(), file_redirect_dir_, nullptr);
+
+        LOG_INFO(Frontend, "[ZFlip7Driver] Custom Vulkan driver load {}",
+                 handle ? "succeeded" : "failed");
     }
 
     // Try to load the system driver.
     if (!handle) {
+        LOG_INFO(Frontend, "[ZFlip7Driver] Falling back to system Vulkan driver");
         handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
                                             nullptr, nullptr, file_redirect_dir_, nullptr);
+        LOG_INFO(Frontend, "[ZFlip7Driver] System Vulkan driver load {}",
+                 handle ? "succeeded" : "failed");
     }
 
     m_vulkan_library = std::make_shared<Common::DynamicLibrary>(handle);
@@ -771,11 +816,26 @@ void JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_initializeGpuDriver(JNIEnv* e
 [[maybe_unused]] static bool CheckKgslPresent() {
     constexpr auto KgslPath{"/dev/kgsl-3d0"};
 
-    return access(KgslPath, F_OK) == 0;
+    const bool kgsl_present = access(KgslPath, F_OK) == 0;
+    LOG_INFO(Frontend, "[ZFlip7Driver] KGSL check: {} is {}", KgslPath,
+             kgsl_present ? "present" : "absent");
+
+    return kgsl_present;
 }
 
 [[maybe_unused]] bool SupportsCustomDriver() {
-    return android_get_device_api_level() >= 28 && CheckKgslPresent();
+    const int api_level = android_get_device_api_level();
+    const bool api_supported = api_level >= 28;
+    const bool kgsl_present = CheckKgslPresent();
+    const bool experimental_xclipse = IsExperimentalSamsungXclipseDevice();
+    const bool supported = api_supported && (kgsl_present || experimental_xclipse);
+
+    LOG_INFO(Frontend,
+             "[ZFlip7Driver] SupportsCustomDriver: api_level={}, api_supported={}, "
+             "kgsl_present={}, experimental_xclipse={}, supported={}",
+             api_level, api_supported, kgsl_present, experimental_xclipse, supported);
+
+    return supported;
 }
 
 jboolean JNICALL Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_supportsCustomDriverLoading(
