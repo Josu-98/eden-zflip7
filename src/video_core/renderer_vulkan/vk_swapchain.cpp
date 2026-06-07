@@ -11,6 +11,7 @@
 
 #ifdef __ANDROID__
 #include <android/api-level.h>
+#include <android/log.h>
 #endif
 
 #include "common/logging.h"
@@ -26,6 +27,14 @@
 namespace Vulkan {
 
 namespace {
+
+void MarkSwapchainInitStage(const char* stage) {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanSwapchain", "stage=%s", stage);
+#else
+    (void)stage;
+#endif
+}
 
 VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats) {
     if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
@@ -141,18 +150,27 @@ void Swapchain::Create(
     surface = surface_;
 
     const auto physical_device = device.GetPhysical();
+    MarkSwapchainInitStage("get_initial_surface_capabilities");
     const auto capabilities{physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface))};
+    MarkSwapchainInitStage("get_initial_surface_capabilities_succeeded");
     if (capabilities.maxImageExtent.width == 0 || capabilities.maxImageExtent.height == 0) {
+        MarkSwapchainInitStage("zero_max_extent");
         return;
     }
 
+    MarkSwapchainInitStage("destroy_old_resources");
     Destroy();
 
+    MarkSwapchainInitStage("create_swapchain");
     CreateSwapchain(capabilities);
+    MarkSwapchainInitStage("create_swapchain_succeeded");
+    MarkSwapchainInitStage("create_semaphores");
     CreateSemaphores();
+    MarkSwapchainInitStage("create_semaphores_succeeded");
 
     resource_ticks.clear();
     resource_ticks.resize(image_count);
+    MarkSwapchainInitStage("complete");
 }
 
 bool Swapchain::AcquireNextImage() {
@@ -248,8 +266,12 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
 
 void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     const auto physical_device{device.GetPhysical()};
+    MarkSwapchainInitStage("get_surface_formats");
     const auto formats{physical_device.GetSurfaceFormatsKHR(VkSurfaceKHR(surface))};
+    MarkSwapchainInitStage("get_surface_formats_succeeded");
+    MarkSwapchainInitStage("get_surface_present_modes");
     const auto present_modes = physical_device.GetSurfacePresentModesKHR(VkSurfaceKHR(surface));
+    MarkSwapchainInitStage("get_surface_present_modes_succeeded");
 
     has_mailbox = std::find(present_modes.begin(), present_modes.end(), VK_PRESENT_MODE_MAILBOX_KHR)
                   != present_modes.end();
@@ -329,14 +351,20 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         swapchain_ci.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
     }
     // Request the size again to reduce the possibility of a TOCTOU race condition.
+    MarkSwapchainInitStage("get_updated_surface_capabilities");
     const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface));
+    MarkSwapchainInitStage("get_updated_surface_capabilities_succeeded");
     swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
     // Don't add code within this and the swapchain creation.
+    MarkSwapchainInitStage("vk_create_swapchain");
     swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+    MarkSwapchainInitStage("vk_create_swapchain_succeeded");
 
     extent = swapchain_ci.imageExtent;
 
+    MarkSwapchainInitStage("get_swapchain_images");
     images = swapchain.GetImages();
+    MarkSwapchainInitStage("get_swapchain_images_succeeded");
     image_count = static_cast<u32>(images.size());
 #ifdef ANDROID
     // Android is already ordered the same as Switch.
