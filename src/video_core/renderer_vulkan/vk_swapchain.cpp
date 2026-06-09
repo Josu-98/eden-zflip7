@@ -36,6 +36,72 @@ void MarkSwapchainInitStage(const char* stage) {
 #endif
 }
 
+#ifdef __ANDROID__
+void LogSwapchainCreateInfo(const VkSwapchainCreateInfoKHR& create_info,
+                            const VkSurfaceCapabilitiesKHR& capabilities,
+                            vk::Span<VkSurfaceFormatKHR> formats,
+                            vk::Span<VkPresentModeKHR> present_modes,
+                            bool mutable_format_enabled) {
+    const bool image_count_supported =
+        create_info.minImageCount >= capabilities.minImageCount &&
+        (capabilities.maxImageCount == 0 ||
+         create_info.minImageCount <= capabilities.maxImageCount);
+    const bool extent_supported =
+        create_info.imageExtent.width >= capabilities.minImageExtent.width &&
+        create_info.imageExtent.width <= capabilities.maxImageExtent.width &&
+        create_info.imageExtent.height >= capabilities.minImageExtent.height &&
+        create_info.imageExtent.height <= capabilities.maxImageExtent.height;
+    const bool usage_supported =
+        (create_info.imageUsage & ~capabilities.supportedUsageFlags) == 0;
+    const bool transform_supported =
+        (capabilities.supportedTransforms & create_info.preTransform) != 0;
+    const bool alpha_supported =
+        (capabilities.supportedCompositeAlpha & create_info.compositeAlpha) != 0;
+    const bool format_supported =
+        std::ranges::any_of(formats, [&](const VkSurfaceFormatKHR& format) {
+            return format.format == create_info.imageFormat &&
+                   format.colorSpace == create_info.imageColorSpace;
+        });
+    const bool present_mode_supported =
+        std::ranges::find(present_modes, create_info.presentMode) != present_modes.end();
+
+    __android_log_print(
+        ANDROID_LOG_INFO, "EdenVulkanSwapchain",
+        "create_info images=%u format=%d colorSpace=%d extent=%ux%u layers=%u usage=0x%x "
+        "sharing=%d queues=%u transform=0x%x alpha=0x%x presentMode=%d clipped=%u "
+        "flags=0x%x mutable=%u",
+        create_info.minImageCount, static_cast<int>(create_info.imageFormat),
+        static_cast<int>(create_info.imageColorSpace), create_info.imageExtent.width,
+        create_info.imageExtent.height, create_info.imageArrayLayers,
+        static_cast<unsigned>(create_info.imageUsage),
+        static_cast<int>(create_info.imageSharingMode), create_info.queueFamilyIndexCount,
+        static_cast<unsigned>(create_info.preTransform),
+        static_cast<unsigned>(create_info.compositeAlpha),
+        static_cast<int>(create_info.presentMode), static_cast<unsigned>(create_info.clipped),
+        static_cast<unsigned>(create_info.flags), mutable_format_enabled ? 1U : 0U);
+    __android_log_print(
+        ANDROID_LOG_INFO, "EdenVulkanSwapchain",
+        "capabilities minImages=%u maxImages=%u currentExtent=%ux%u minExtent=%ux%u "
+        "maxExtent=%ux%u currentTransform=0x%x transforms=0x%x alpha=0x%x usage=0x%x",
+        capabilities.minImageCount, capabilities.maxImageCount,
+        capabilities.currentExtent.width, capabilities.currentExtent.height,
+        capabilities.minImageExtent.width, capabilities.minImageExtent.height,
+        capabilities.maxImageExtent.width, capabilities.maxImageExtent.height,
+        static_cast<unsigned>(capabilities.currentTransform),
+        static_cast<unsigned>(capabilities.supportedTransforms),
+        static_cast<unsigned>(capabilities.supportedCompositeAlpha),
+        static_cast<unsigned>(capabilities.supportedUsageFlags));
+    __android_log_print(
+        ANDROID_LOG_INFO, "EdenVulkanSwapchain",
+        "create_info_support imageCount=%u extent=%u usage=%u transform=%u alpha=%u "
+        "format=%u presentMode=%u formats=%u presentModes=%u",
+        image_count_supported ? 1U : 0U, extent_supported ? 1U : 0U,
+        usage_supported ? 1U : 0U, transform_supported ? 1U : 0U,
+        alpha_supported ? 1U : 0U, format_supported ? 1U : 0U,
+        present_mode_supported ? 1U : 0U, formats.size(), present_modes.size());
+}
+#endif
+
 VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats) {
     if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
         VkSurfaceFormatKHR format;
@@ -355,6 +421,10 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface));
     MarkSwapchainInitStage("get_updated_surface_capabilities_succeeded");
     swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
+#ifdef __ANDROID__
+    LogSwapchainCreateInfo(swapchain_ci, updated_capabilities, formats, present_modes,
+                           device.IsKhrSwapchainMutableFormatEnabled());
+#endif
     // Don't add code within this and the swapchain creation.
     MarkSwapchainInitStage("vk_create_swapchain");
     swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
