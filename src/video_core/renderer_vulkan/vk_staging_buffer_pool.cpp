@@ -101,7 +101,7 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
     if (device.IsExtTransformFeedbackSupported()) {
         stream_ci.usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
     }
-    stream_buffer = memory_allocator.CreateBuffer(stream_ci, MemoryUsage::Stream);
+    stream_buffer = memory_allocator.CreateBuffer(stream_ci, MemoryUsage::Upload);
 #ifdef __ANDROID__
     __android_log_print(
         ANDROID_LOG_INFO, "EdenVulkanRasterizer",
