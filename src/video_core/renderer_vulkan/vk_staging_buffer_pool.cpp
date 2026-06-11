@@ -41,7 +41,7 @@ constexpr VkDeviceSize MAX_ALIGNMENT = 256;
 constexpr VkDeviceSize MAX_STREAM_BUFFER_SIZE = 128_MiB;
 #ifdef __ANDROID__
 // Android diagnostic size cap for stream buffer
-constexpr VkDeviceSize ANDROID_STREAM_BUFFER_SIZE = 32_MiB;
+constexpr VkDeviceSize ANDROID_STREAM_BUFFER_SIZE = 8_MiB;
 #endif
 
 size_t GetStreamBufferSize(const Device& device) {
@@ -82,10 +82,8 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
     __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", "staging_pool_create_stream_buffer");
     __android_log_print(
         ANDROID_LOG_INFO, "EdenVulkanRasterizer",
-        "stage=staging_pool_create_stream_buffer_requested_bytes=%llu usage=0x%x",
-        static_cast<unsigned long long>(stream_buffer_size),
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        "stage=staging_pool_create_stream_buffer_requested_bytes=%llu memory_usage=Stream",
+        static_cast<unsigned long long>(stream_buffer_size));
 #endif
     VkBufferCreateInfo stream_ci = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -101,11 +99,13 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
     if (device.IsExtTransformFeedbackSupported()) {
         stream_ci.usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
     }
+    // DIAGNOSTIC: Test Upload (device-local-only) vs Stream (host-visible + device-local)
+    // Upload requires host visible memory optimized for CPU to GPU uploads
     stream_buffer = memory_allocator.CreateBuffer(stream_ci, MemoryUsage::Upload);
 #ifdef __ANDROID__
     __android_log_print(
         ANDROID_LOG_INFO, "EdenVulkanRasterizer",
-        "stage=staging_pool_create_stream_buffer_succeeded_requested_bytes=%llu",
+        "stage=staging_pool_create_stream_buffer_succeeded_requested_bytes=%llu memory_usage=Upload",
         static_cast<unsigned long long>(stream_ci.size));
 #endif
     if (device.HasDebuggingToolAttached()) {
