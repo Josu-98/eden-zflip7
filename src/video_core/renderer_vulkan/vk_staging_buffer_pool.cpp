@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <utility>
 #include <vector>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include <fmt/ranges.h>
 
@@ -23,12 +26,23 @@
 namespace Vulkan {
 namespace {
 
+static void MarkRasterizerInitStage(const char* stage) {
+    LOG_INFO(Render_Vulkan, "Rasterizer init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", stage);
+#endif
+}
+
 using namespace Common::Literals;
 
-// Maximum potential alignment of a Vulkan buffer
+// Maximum potential alignment of a staging buffer
 constexpr VkDeviceSize MAX_ALIGNMENT = 256;
 // Stream buffer size in bytes
 constexpr VkDeviceSize MAX_STREAM_BUFFER_SIZE = 128_MiB;
+#ifdef __ANDROID__
+// Android diagnostic size cap for stream buffer
+constexpr VkDeviceSize ANDROID_STREAM_BUFFER_SIZE = 32_MiB;
+#endif
 
 size_t GetStreamBufferSize(const Device& device) {
     VkDeviceSize size{0};
@@ -43,7 +57,11 @@ size_t GetStreamBufferSize(const Device& device) {
             size = size * 40 / 100;
         }
     } else {
+#ifdef __ANDROID__
+        size = ANDROID_STREAM_BUFFER_SIZE;
+#else
         size = MAX_STREAM_BUFFER_SIZE;
+#endif
     }
     return (std::min)(Common::AlignUp(size, MAX_ALIGNMENT), MAX_STREAM_BUFFER_SIZE);
 }
@@ -54,6 +72,21 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
     : device{device_}, memory_allocator{memory_allocator_}, scheduler{scheduler_},
       stream_buffer_size{GetStreamBufferSize(device)}, region_size{stream_buffer_size /
                                                                    StagingBufferPool::NUM_SYNCS} {
+    MarkRasterizerInitStage("staging_pool");
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", "staging_pool");
+#endif
+
+    MarkRasterizerInitStage("staging_pool_create_stream_buffer");
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", "staging_pool_create_stream_buffer");
+    __android_log_print(
+        ANDROID_LOG_INFO, "EdenVulkanRasterizer",
+        "stage=staging_pool_create_stream_buffer_requested_bytes=%llu usage=0x%x",
+        static_cast<unsigned long long>(stream_buffer_size),
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+#endif
     VkBufferCreateInfo stream_ci = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
@@ -69,6 +102,12 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
         stream_ci.usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
     }
     stream_buffer = memory_allocator.CreateBuffer(stream_ci, MemoryUsage::Stream);
+#ifdef __ANDROID__
+    __android_log_print(
+        ANDROID_LOG_INFO, "EdenVulkanRasterizer",
+        "stage=staging_pool_create_stream_buffer_succeeded_requested_bytes=%llu",
+        static_cast<unsigned long long>(stream_ci.size));
+#endif
     if (device.HasDebuggingToolAttached()) {
         stream_buffer.SetObjectNameEXT("Stream Buffer");
     }
