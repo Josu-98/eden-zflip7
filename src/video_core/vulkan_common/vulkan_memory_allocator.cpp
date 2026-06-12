@@ -25,6 +25,7 @@
 #include "common/settings.h"
 #ifdef __ANDROID__
 #include <android/log.h>
+#include <dlfcn.h>
 #endif
 
 namespace Vulkan {
@@ -138,6 +139,22 @@ void RunDirectBufferAllocationProbe(const Device& device,
                             "stage=direct_probe_bind_details memory_type=%u heap=%u flags=0x%x allocation_size=%llu bind_proc=%p",
                             type_index, heap_index, flags, static_cast<unsigned long long>(reqs.size),
                             (void*)dld.vkBindBufferMemory);
+        Dl_info bind_info{};
+        const void* bind_proc = reinterpret_cast<const void*>(dld.vkBindBufferMemory);
+        if (dladdr(bind_proc, &bind_info) != 0 && bind_info.dli_fbase != nullptr) {
+            const auto bind_address = reinterpret_cast<uintptr_t>(bind_proc);
+            const auto base_address = reinterpret_cast<uintptr_t>(bind_info.dli_fbase);
+            __android_log_print(
+                ANDROID_LOG_INFO, "EdenVulkanProbe",
+                "stage=direct_probe_bind_owner object=%s base=%p symbol=%s symbol_address=%p relative_offset=0x%llx",
+                bind_info.dli_fname != nullptr ? bind_info.dli_fname : "<unknown>",
+                bind_info.dli_fbase, bind_info.dli_sname != nullptr ? bind_info.dli_sname : "<none>",
+                bind_info.dli_saddr,
+                static_cast<unsigned long long>(bind_address - base_address));
+        } else {
+            __android_log_print(ANDROID_LOG_INFO, "EdenVulkanProbe",
+                                "stage=direct_probe_bind_owner unresolved bind_proc=%p", bind_proc);
+        }
         const VkResult bind_result =
             dld.vkBindBufferMemory(vk_device, buffer, memory, 0);
         LogDirectProbeResult("direct_probe_bind_result", bind_result);
