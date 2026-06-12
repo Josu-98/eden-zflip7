@@ -134,6 +134,10 @@ void RunDirectBufferAllocationProbe(const Device& device,
             continue;
         }
 
+        __android_log_print(ANDROID_LOG_INFO, "EdenVulkanProbe",
+                            "stage=direct_probe_bind_details memory_type=%u heap=%u flags=0x%x allocation_size=%llu bind_proc=%p",
+                            type_index, heap_index, flags, static_cast<unsigned long long>(reqs.size),
+                            (void*)dld.vkBindBufferMemory);
         const VkResult bind_result =
             dld.vkBindBufferMemory(vk_device, buffer, memory, 0);
         LogDirectProbeResult("direct_probe_bind_result", bind_result);
