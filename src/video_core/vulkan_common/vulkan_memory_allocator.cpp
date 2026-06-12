@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
-#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -24,9 +23,142 @@
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "common/settings.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace Vulkan {
     namespace {
+
+#ifdef __ANDROID__
+constexpr VkDeviceSize kDirectProbeBufferSize = 8ull * 1024ull * 1024ull;
+constexpr VkBufferUsageFlags kDirectProbeRequiredUsage =
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+    VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+
+void LogDirectProbeStage(const char* stage) {
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanProbe", "stage=%s", stage);
+}
+
+void LogDirectProbeResult(const char* stage, VkResult result) {
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanProbe", "stage=%s result=%d", stage, result);
+}
+
+bool ShouldRunDirectBufferProbe(const VkBufferCreateInfo& ci, MemoryUsage usage) {
+    return ci.size == kDirectProbeBufferSize &&
+           (ci.usage & kDirectProbeRequiredUsage) == kDirectProbeRequiredUsage &&
+           usage == MemoryUsage::Stream;
+}
+
+void RunDirectBufferAllocationProbe(const Device& device,
+                                    const VkBufferCreateInfo& ci,
+                                    const VkPhysicalDeviceMemoryProperties& properties) {
+    const VkDevice vk_device = *device.GetLogical();
+    const auto& dld = device.GetDispatchLoader();
+
+    if (!dld.vkCreateBuffer || !dld.vkGetBufferMemoryRequirements2 || !dld.vkAllocateMemory ||
+        !dld.vkBindBufferMemory || !dld.vkMapMemory || !dld.vkUnmapMemory || !dld.vkFreeMemory ||
+        !dld.vkDestroyBuffer) {
+        LogDirectProbeStage("direct_probe_missing_proc");
+        return;
+    }
+
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void* mapped = nullptr;
+    bool mapped_ok = false;
+
+    const auto cleanup = [&]() {
+        if (mapped_ok && memory != VK_NULL_HANDLE) {
+            dld.vkUnmapMemory(vk_device, memory);
+            mapped_ok = false;
+            mapped = nullptr;
+        }
+        if (buffer != VK_NULL_HANDLE) {
+            dld.vkDestroyBuffer(vk_device, buffer, nullptr);
+            buffer = VK_NULL_HANDLE;
+        }
+        if (memory != VK_NULL_HANDLE) {
+            dld.vkFreeMemory(vk_device, memory, nullptr);
+            memory = VK_NULL_HANDLE;
+        }
+    };
+
+    const VkResult create_result = dld.vkCreateBuffer(vk_device, &ci, nullptr, &buffer);
+    LogDirectProbeResult("direct_probe_create_buffer_result", create_result);
+    if (create_result != VK_SUCCESS) {
+        cleanup();
+        return;
+    }
+
+    const VkBufferMemoryRequirementsInfo2 req_info{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
+        .pNext = nullptr,
+        .buffer = buffer,
+    };
+    VkMemoryRequirements2 requirements{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
+        .pNext = nullptr,
+        .memoryRequirements{},
+    };
+    dld.vkGetBufferMemoryRequirements2(vk_device, &req_info, &requirements);
+    const VkMemoryRequirements& reqs = requirements.memoryRequirements;
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanProbe",
+                      "stage=direct_probe_requirements size=%llu alignment=%llu type_bits=0x%x",
+                      static_cast<unsigned long long>(reqs.size),
+                      static_cast<unsigned long long>(reqs.alignment), reqs.memoryTypeBits);
+
+    bool any_bind_success = false;
+    for (u32 type_index = 0; type_index < properties.memoryTypeCount; ++type_index) {
+        if (((reqs.memoryTypeBits >> type_index) & 1u) == 0u) {
+            continue;
+        }
+        const VkMemoryPropertyFlags flags = properties.memoryTypes[type_index].propertyFlags;
+        if ((flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0) {
+            continue;
+        }
+        const u32 heap_index = properties.memoryTypes[type_index].heapIndex;
+        __android_log_print(ANDROID_LOG_INFO, "EdenVulkanProbe",
+                            "stage=direct_probe_candidate type=%u flags=0x%x heap=%u",
+                            type_index, flags, heap_index);
+
+        VkMemoryAllocateInfo alloc_info{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .allocationSize = reqs.size,
+            .memoryTypeIndex = type_index,
+        };
+        const VkResult allocate_result = dld.vkAllocateMemory(vk_device, &alloc_info, nullptr, &memory);
+        LogDirectProbeResult("direct_probe_allocate_result", allocate_result);
+        if (allocate_result != VK_SUCCESS) {
+            continue;
+        }
+
+        const VkResult bind_result =
+            dld.vkBindBufferMemory(vk_device, buffer, memory, 0);
+        LogDirectProbeResult("direct_probe_bind_result", bind_result);
+        if (bind_result != VK_SUCCESS) {
+            cleanup();
+            continue;
+        }
+
+        any_bind_success = true;
+        const VkResult map_result = dld.vkMapMemory(vk_device, memory, 0, reqs.size, 0, &mapped);
+        LogDirectProbeResult("direct_probe_map_result", map_result);
+        if (map_result == VK_SUCCESS) {
+            mapped_ok = true;
+        }
+
+        cleanup();
+        break;
+    }
+    if (!any_bind_success) {
+        LogDirectProbeStage("direct_probe_all_bind_failed");
+    }
+
+    cleanup();
+}
+#endif
 
 // Helpers translating MemoryUsage to flags/usage
 
@@ -259,12 +391,18 @@ namespace Vulkan {
     vk::Buffer
     MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage) const
     {
+#ifdef __ANDROID__
+        if (ShouldRunDirectBufferProbe(ci, usage)) {
+            RunDirectBufferAllocationProbe(device, ci, properties);
+        }
+#endif
+
         const VmaAllocationCreateInfo alloc_ci = {
                 .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | MemoryUsageVmaFlags(usage),
                 .usage = MemoryUsageVma(usage),
                 .requiredFlags = 0,
                 .preferredFlags = MemoryUsagePreferredVmaFlags(usage),
-                .memoryTypeBits = usage == MemoryUsage::Stream ? 0u : valid_memory_types,
+                .memoryTypeBits = valid_memory_types,
                 .pool = VK_NULL_HANDLE,
                 .pUserData = nullptr,
                 .priority = 0.f,
@@ -275,7 +413,15 @@ namespace Vulkan {
         VmaAllocation allocation{};
         VkMemoryPropertyFlags property_flags{};
 
-        vk::Check(vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
+        const VkResult res =
+            vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+#ifdef __ANDROID__
+        if (ShouldRunDirectBufferProbe(ci, usage)) {
+            LogDirectProbeResult("vma_create_buffer_result", res);
+        }
+#endif
+
+        vk::Check(res);
         vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
 
         // Log GPU memory allocation for buffers
