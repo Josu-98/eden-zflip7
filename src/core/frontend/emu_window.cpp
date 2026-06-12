@@ -6,10 +6,16 @@
 
 #include <mutex>
 #include "core/frontend/emu_window.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace Core::Frontend {
 
 EmuWindow::EmuWindow() {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit", "stage=emu_window");
+#endif
     // TODO: Find a better place to set this.
     config.min_client_area_size =
         std::make_pair(Layout::MinimumSize::Width, Layout::MinimumSize::Height);

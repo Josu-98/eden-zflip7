@@ -10,12 +10,18 @@
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
 #include "video_core/renderer_base.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace VideoCore {
 
 RendererBase::RendererBase(Core::Frontend::EmuWindow& window_,
                            std::unique_ptr<Core::Frontend::GraphicsContext> context_)
     : render_window{window_}, context{std::move(context_)} {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit", "stage=renderer_base");
+#endif
     RefreshBaseSettings();
 }
 

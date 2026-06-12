@@ -20,6 +20,9 @@
 #endif
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/video_core.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace {
 
@@ -53,12 +56,28 @@ std::unique_ptr<Tegra::GPU> CreateGPU(Core::Frontend::EmuWindow& emu_window, Cor
     const bool use_async = Settings::values.use_asynchronous_gpu_emulation.GetValue();
     auto gpu = std::make_unique<Tegra::GPU>(system, use_async, use_nvdec);
     auto context = emu_window.CreateSharedContext();
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit", "stage=gpu_context_create_done");
+#endif
     auto scope = context->Acquire();
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit", "stage=gpu_context_acquire_done");
+#endif
     try {
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit", "stage=gpu_renderer_create_start");
+#endif
         auto renderer = CreateRenderer(system, emu_window, *gpu, std::move(context));
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit", "stage=gpu_renderer_create_done");
+#endif
         gpu->BindRenderer(std::move(renderer));
         return gpu;
     } catch (const std::runtime_error& exception) {
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "EdenVulkanInit",
+                            "stage=gpu_renderer_create_failed error=%s", exception.what());
+#endif
         scope.Cancel();
         LOG_ERROR(HW_GPU, "Failed to initialize GPU: {}", exception.what());
         return nullptr;
