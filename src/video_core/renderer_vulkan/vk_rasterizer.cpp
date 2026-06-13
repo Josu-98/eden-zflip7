@@ -9,6 +9,10 @@
 #include <memory>
 #include <mutex>
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
 #include <fmt/format.h>
 
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
@@ -196,6 +200,20 @@ bool IsPrimitiveRestartSupported(const Device& device, VkPrimitiveTopology topol
 }
 } // Anonymous namespace
 
+namespace {
+// Thread-local stage marker for RasterizerVulkan initialization diagnostics
+thread_local const char* rasterizer_init_stage = "not_started";
+
+void MarkRasterizerInitStage(const char* stage) {
+    rasterizer_init_stage = stage;
+    LOG_INFO(Render_Vulkan, "Rasterizer init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer",
+                        "stage=%s", stage);
+#endif
+}
+} // Anonymous namespace
+
 RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra::GPU& gpu_,
                                    Tegra::MaxwellDeviceMemoryManager& device_memory_,
                                    const Device& device_, MemoryAllocator& memory_allocator_,
@@ -220,6 +238,7 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       accelerate_dma(buffer_cache, texture_cache, scheduler),
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       wfi_event(device.GetLogical().CreateEvent()) {
+    MarkRasterizerInitStage("constructor_body");
     scheduler.SetQueryCache(query_cache);
 }
 

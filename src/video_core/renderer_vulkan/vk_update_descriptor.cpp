@@ -6,6 +6,9 @@
 
 #include <variant>
 #include <boost/container/static_vector.hpp>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "common/logging.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -15,8 +18,16 @@
 
 namespace Vulkan {
 
+static void MarkRasterizerInitStage(const char* stage) {
+    LOG_INFO(Render_Vulkan, "Rasterizer init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", stage);
+#endif
+}
+
 UpdateDescriptorQueue::UpdateDescriptorQueue(const Device& device_, Scheduler& scheduler_)
     : device{device_}, scheduler{scheduler_} {
+    MarkRasterizerInitStage("guest_descriptor_queue");
     payload_start = payload.data();
     payload_cursor = payload.data();
 }

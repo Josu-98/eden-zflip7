@@ -48,10 +48,20 @@
 #ifdef ANDROID
 #include "../../android/app/src/main/jni/android_settings.h"
 #endif
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace Vulkan {
 
 namespace {
+static void MarkRasterizerInitStage(const char* stage) {
+    LOG_INFO(Render_Vulkan, "Rasterizer init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", stage);
+#endif
+}
+
 using Shader::Backend::SPIRV::EmitSPIRV;
 using Shader::Maxwell::ConvertLegacyToGeneric;
 using Shader::Maxwell::GenerateGeometryPassthrough;
@@ -376,6 +386,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       workers(device.HasBrokenParallelShaderCompiling() ? 1ULL : GetTotalPipelineWorkers(),
               "VkPipelineBuilder"),
       serialization_thread(1, "VkPipelineSerialization") {
+    MarkRasterizerInitStage("pipeline_cache");
     const auto& float_control{device.FloatControlProperties()};
     const VkDriverId driver_id{device.GetDriverID()};
     profile = Shader::Profile{

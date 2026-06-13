@@ -6,6 +6,10 @@
 
 #include <ankerl/unordered_dense.h>
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
 #include <boost/container/static_vector.hpp>
 
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
@@ -15,6 +19,14 @@
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
+
+static void MarkRasterizerInitStage(const char* stage) {
+    LOG_INFO(Render_Vulkan, "Rasterizer init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", stage);
+#endif
+}
+
 namespace {
 using VideoCore::Surface::PixelFormat;
 using VideoCore::Surface::SurfaceType;
@@ -67,7 +79,9 @@ using VideoCore::Surface::SurfaceType;
         }
     } // Anonymous namespace
 
-RenderPassCache::RenderPassCache(const Device& device_) : device{&device_} {}
+RenderPassCache::RenderPassCache(const Device& device_) : device{&device_} {
+    MarkRasterizerInitStage("render_pass_cache");
+}
 
 VkRenderPass RenderPassCache::Get(const RenderPassKey& key) {
     std::scoped_lock lock{mutex};

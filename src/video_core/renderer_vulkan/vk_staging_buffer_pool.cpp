@@ -73,16 +73,12 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
       stream_buffer_size{GetStreamBufferSize(device)}, region_size{stream_buffer_size /
                                                                    StagingBufferPool::NUM_SYNCS} {
     MarkRasterizerInitStage("staging_pool");
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", "staging_pool");
-#endif
 
     MarkRasterizerInitStage("staging_pool_create_stream_buffer");
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", "staging_pool_create_stream_buffer");
     __android_log_print(
         ANDROID_LOG_INFO, "EdenVulkanRasterizer",
-        "stage=staging_pool_create_stream_buffer_requested_bytes=%llu memory_usage=Stream",
+        "stage=staging_pool_create_stream_buffer_details requested_bytes=%llu memory_usage=Stream",
         static_cast<unsigned long long>(stream_buffer_size));
 #endif
     VkBufferCreateInfo stream_ci = {
@@ -99,14 +95,13 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
     if (device.IsExtTransformFeedbackSupported()) {
         stream_ci.usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
     }
-    // DIAGNOSTIC: Test Upload (device-local-only) vs Stream (host-visible + device-local)
-    // Upload requires host visible memory optimized for CPU to GPU uploads
-    stream_buffer = memory_allocator.CreateBuffer(stream_ci, MemoryUsage::Upload);
+    stream_buffer = memory_allocator.CreateBuffer(stream_ci, MemoryUsage::Stream);
 #ifdef __ANDROID__
     __android_log_print(
         ANDROID_LOG_INFO, "EdenVulkanRasterizer",
-        "stage=staging_pool_create_stream_buffer_succeeded_requested_bytes=%llu memory_usage=Upload",
-        static_cast<unsigned long long>(stream_ci.size));
+        "stage=staging_pool_create_stream_buffer_succeeded requested_bytes=%llu usage=0x%x",
+        static_cast<unsigned long long>(stream_ci.size),
+        static_cast<unsigned>(stream_ci.usage));
 #endif
     if (device.HasDebuggingToolAttached()) {
         stream_buffer.SetObjectNameEXT("Stream Buffer");

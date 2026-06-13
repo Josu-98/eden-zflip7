@@ -9,6 +9,9 @@
 #include <span>
 #include <memory>
 #include <vector>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include <boost/container/small_vector.hpp>
 #include <bit>
 #include <numeric>
@@ -33,6 +36,15 @@
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/textures/decoders.h"
+
+namespace {
+static void MarkRasterizerInitStage(const char* stage) {
+    LOG_INFO(Render_Vulkan, "Rasterizer init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", stage);
+#endif
+}
+} // Anonymous namespace
 
 namespace Vulkan {
 
@@ -880,6 +892,7 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
     : device{device_}, scheduler{scheduler_}, memory_allocator{memory_allocator_},
       staging_buffer_pool{staging_buffer_pool_}, blit_image_helper{blit_image_helper_},
       render_pass_cache{render_pass_cache_}, resolution{Settings::values.resolution_info} {
+    MarkRasterizerInitStage("texture_cache_runtime");
     if (Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu) {
         astc_decoder_pass.emplace(device, scheduler, descriptor_pool, staging_buffer_pool,
                                   compute_pass_descriptor_queue, memory_allocator);

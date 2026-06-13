@@ -8,6 +8,9 @@
 #include <mutex>
 #include <span>
 #include <vector>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "common/common_types.h"
 #include <ranges>
@@ -18,6 +21,13 @@
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
+
+static void MarkRasterizerInitStage(const char* stage) {
+    LOG_INFO(Render_Vulkan, "Rasterizer init stage: {}", stage);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer", "stage=%s", stage);
+#endif
+}
 
 // Prefer small grow rates to avoid saturating the descriptor pool with barely used pipelines
 constexpr size_t SETS_GROW_RATE = 16;
@@ -126,7 +136,9 @@ vk::DescriptorSets DescriptorAllocator::AllocateDescriptors(size_t count) {
 }
 
 DescriptorPool::DescriptorPool(const Device& device_, Scheduler& scheduler)
-    : device{device_}, master_semaphore{scheduler.GetMasterSemaphore()} {}
+    : device{device_}, master_semaphore{scheduler.GetMasterSemaphore()} {
+    MarkRasterizerInitStage("descriptor_pool");
+}
 
 DescriptorPool::~DescriptorPool() = default;
 
