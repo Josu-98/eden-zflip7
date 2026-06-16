@@ -504,45 +504,115 @@ void BeginRenderPass(vk::CommandBuffer& cmdbuf, const Framebuffer* framebuffer) 
 }
 } // Anonymous namespace
 
+template <typename Factory>
+auto BlitImageInit(const char* stage, Factory&& factory) -> decltype(factory()) {
+    LOG_INFO(Render_Vulkan, "blit_image_init stage={} start", stage);
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer",
+                        "blit_image_init stage=%s start", stage);
+#endif
+    try {
+        auto result = factory();
+        LOG_INFO(Render_Vulkan, "blit_image_init stage={} succeeded", stage);
+#if defined(__ANDROID__)
+        __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer",
+                            "blit_image_init stage=%s succeeded", stage);
+#endif
+        return result;
+    } catch (const vk::Exception& e) {
+        LOG_INFO(Render_Vulkan, "blit_image_init stage={} failed error={}", stage, e.what());
+#if defined(__ANDROID__)
+        __android_log_print(ANDROID_LOG_INFO, "EdenVulkanRasterizer",
+                            "blit_image_init stage=%s failed error=%s", stage, e.what());
+#endif
+        throw;
+    }
+}
+
 BlitImageHelper::BlitImageHelper(const Device& device_, Scheduler& scheduler_,
                                  StateTracker& state_tracker_, DescriptorPool& descriptor_pool)
     : device{device_}, scheduler{scheduler_}, state_tracker{state_tracker_},
-      one_texture_set_layout(device.GetLogical().CreateDescriptorSetLayout(
-          ONE_TEXTURE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)),
-      two_textures_set_layout(device.GetLogical().CreateDescriptorSetLayout(
-          TWO_TEXTURES_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)),
+      one_texture_set_layout(BlitImageInit("one_texture_set_layout", [&] {
+          return device.GetLogical().CreateDescriptorSetLayout(
+              ONE_TEXTURE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+      })),
+      two_textures_set_layout(BlitImageInit("two_textures_set_layout", [&] {
+          return device.GetLogical().CreateDescriptorSetLayout(
+              TWO_TEXTURES_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+      })),
       one_texture_descriptor_allocator{
-          descriptor_pool.Allocator(*one_texture_set_layout, TEXTURE_DESCRIPTOR_BANK_INFO<1>)},
+          BlitImageInit("one_texture_descriptor_allocator", [&] {
+              return descriptor_pool.Allocator(
+                  *one_texture_set_layout, TEXTURE_DESCRIPTOR_BANK_INFO<1>);
+          })},
       two_textures_descriptor_allocator{
-          descriptor_pool.Allocator(*two_textures_set_layout, TEXTURE_DESCRIPTOR_BANK_INFO<2>)},
-      one_texture_pipeline_layout(device.GetLogical().CreatePipelineLayout(PipelineLayoutCreateInfo(
-          one_texture_set_layout.address(),
-          PUSH_CONSTANT_RANGE<VK_SHADER_STAGE_VERTEX_BIT, sizeof(PushConstants)>))),
-      two_textures_pipeline_layout(
-          device.GetLogical().CreatePipelineLayout(PipelineLayoutCreateInfo(
+          BlitImageInit("two_textures_descriptor_allocator", [&] {
+              return descriptor_pool.Allocator(
+                  *two_textures_set_layout, TEXTURE_DESCRIPTOR_BANK_INFO<2>);
+          })},
+      one_texture_pipeline_layout(BlitImageInit("one_texture_pipeline_layout", [&] {
+          return device.GetLogical().CreatePipelineLayout(PipelineLayoutCreateInfo(
+              one_texture_set_layout.address(),
+              PUSH_CONSTANT_RANGE<VK_SHADER_STAGE_VERTEX_BIT, sizeof(PushConstants)>));
+      })),
+      two_textures_pipeline_layout(BlitImageInit("two_textures_pipeline_layout", [&] {
+          return device.GetLogical().CreatePipelineLayout(PipelineLayoutCreateInfo(
               two_textures_set_layout.address(),
-              PUSH_CONSTANT_RANGE<VK_SHADER_STAGE_VERTEX_BIT, sizeof(PushConstants)>))),
-      clear_color_pipeline_layout(device.GetLogical().CreatePipelineLayout(PipelineLayoutCreateInfo(
-          nullptr, PUSH_CONSTANT_RANGE<VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 4>))),
-      full_screen_vert(BuildShader(device, FULL_SCREEN_TRIANGLE_VERT_SPV)),
-      blit_color_to_color_frag(BuildShader(device, BLIT_COLOR_FLOAT_FRAG_SPV)),
-      blit_depth_stencil_frag(device.IsExtShaderStencilExportSupported()
-                             ? BuildShader(device, VULKAN_BLIT_DEPTH_STENCIL_FRAG_SPV)
-                             : vk::ShaderModule{}),
-      clear_color_vert(BuildShader(device, VULKAN_COLOR_CLEAR_VERT_SPV)),
-      clear_color_frag(BuildShader(device, VULKAN_COLOR_CLEAR_FRAG_SPV)),
-      clear_stencil_frag(BuildShader(device, VULKAN_DEPTHSTENCIL_CLEAR_FRAG_SPV)),
-      convert_depth_to_float_frag(BuildShader(device, CONVERT_DEPTH_TO_FLOAT_FRAG_SPV)),
-      convert_float_to_depth_frag(BuildShader(device, CONVERT_FLOAT_TO_DEPTH_FRAG_SPV)),
-      convert_abgr8_to_d24s8_frag(device.IsExtShaderStencilExportSupported()
-                                 ? BuildShader(device, CONVERT_ABGR8_TO_D24S8_FRAG_SPV)
-                                 : vk::ShaderModule{}),
-      convert_abgr8_to_d32f_frag(BuildShader(device, CONVERT_ABGR8_TO_D32F_FRAG_SPV)),
-      convert_d32f_to_abgr8_frag(BuildShader(device, CONVERT_D32F_TO_ABGR8_FRAG_SPV)),
-      convert_d24s8_to_abgr8_frag(BuildShader(device, CONVERT_D24S8_TO_ABGR8_FRAG_SPV)),
-      convert_s8d24_to_abgr8_frag(BuildShader(device, CONVERT_S8D24_TO_ABGR8_FRAG_SPV)),
-      linear_sampler(device.GetLogical().CreateSampler(SAMPLER_CREATE_INFO<VK_FILTER_LINEAR>)),
-      nearest_sampler(device.GetLogical().CreateSampler(SAMPLER_CREATE_INFO<VK_FILTER_NEAREST>)) {
+              PUSH_CONSTANT_RANGE<VK_SHADER_STAGE_VERTEX_BIT, sizeof(PushConstants)>));
+      })),
+      clear_color_pipeline_layout(BlitImageInit("clear_color_pipeline_layout", [&] {
+          return device.GetLogical().CreatePipelineLayout(PipelineLayoutCreateInfo(
+              nullptr, PUSH_CONSTANT_RANGE<VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 4>));
+      })),
+      full_screen_vert(BlitImageInit("full_screen_vert", [&] {
+          return BuildShader(device, FULL_SCREEN_TRIANGLE_VERT_SPV);
+      })),
+      blit_color_to_color_frag(BlitImageInit("blit_color_to_color_frag", [&] {
+          return BuildShader(device, BLIT_COLOR_FLOAT_FRAG_SPV);
+      })),
+      blit_depth_stencil_frag(BlitImageInit("blit_depth_stencil_frag", [&] {
+          return device.IsExtShaderStencilExportSupported()
+                     ? BuildShader(device, VULKAN_BLIT_DEPTH_STENCIL_FRAG_SPV)
+                     : vk::ShaderModule{};
+      })),
+      clear_color_vert(BlitImageInit("clear_color_vert", [&] {
+          return BuildShader(device, VULKAN_COLOR_CLEAR_VERT_SPV);
+      })),
+      clear_color_frag(BlitImageInit("clear_color_frag", [&] {
+          return BuildShader(device, VULKAN_COLOR_CLEAR_FRAG_SPV);
+      })),
+      clear_stencil_frag(BlitImageInit("clear_stencil_frag", [&] {
+          return BuildShader(device, VULKAN_DEPTHSTENCIL_CLEAR_FRAG_SPV);
+      })),
+      convert_depth_to_float_frag(BlitImageInit("convert_depth_to_float_frag", [&] {
+          return BuildShader(device, CONVERT_DEPTH_TO_FLOAT_FRAG_SPV);
+      })),
+      convert_float_to_depth_frag(BlitImageInit("convert_float_to_depth_frag", [&] {
+          return BuildShader(device, CONVERT_FLOAT_TO_DEPTH_FRAG_SPV);
+      })),
+      convert_abgr8_to_d24s8_frag(BlitImageInit("convert_abgr8_to_d24s8_frag", [&] {
+          return device.IsExtShaderStencilExportSupported()
+                     ? BuildShader(device, CONVERT_ABGR8_TO_D24S8_FRAG_SPV)
+                     : vk::ShaderModule{};
+      })),
+      convert_abgr8_to_d32f_frag(BlitImageInit("convert_abgr8_to_d32f_frag", [&] {
+          return BuildShader(device, CONVERT_ABGR8_TO_D32F_FRAG_SPV);
+      })),
+      convert_d32f_to_abgr8_frag(BlitImageInit("convert_d32f_to_abgr8_frag", [&] {
+          return BuildShader(device, CONVERT_D32F_TO_ABGR8_FRAG_SPV);
+      })),
+      convert_d24s8_to_abgr8_frag(BlitImageInit("convert_d24s8_to_abgr8_frag", [&] {
+          return BuildShader(device, CONVERT_D24S8_TO_ABGR8_FRAG_SPV);
+      })),
+      convert_s8d24_to_abgr8_frag(BlitImageInit("convert_s8d24_to_abgr8_frag", [&] {
+          return BuildShader(device, CONVERT_S8D24_TO_ABGR8_FRAG_SPV);
+      })),
+      linear_sampler(BlitImageInit("linear_sampler", [&] {
+          return device.GetLogical().CreateSampler(SAMPLER_CREATE_INFO<VK_FILTER_LINEAR>);
+      })),
+      nearest_sampler(BlitImageInit("nearest_sampler", [&] {
+          return device.GetLogical().CreateSampler(SAMPLER_CREATE_INFO<VK_FILTER_NEAREST>);
+      })) {
     MarkRasterizerInitStage("blit_image");
 }
 
